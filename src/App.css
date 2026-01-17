@@ -1,6 +1,6 @@
 :root {
-  --bg-color: rgba(199, 248, 244, 0.62);
-  --window-bg: rgb(199, 248, 244);
+  --bg-color: #ffffff;
+  --window-bg: #ffffff;
   --text-color: rgba(6, 28, 28, 0.92);
   --accent-color: #24cfc2;
   --selected-bg: rgba(36, 207, 194, 0.18);
@@ -10,7 +10,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-color: rgba(10, 26, 28, 0.72);
+    --bg-color: rgb(10, 26, 28);
     --window-bg: rgb(10, 26, 28);
     --text-color: rgba(234, 255, 255, 0.92);
     --accent-color: #63efe1;
@@ -37,13 +37,10 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(120% 120% at 20% 0%, rgba(36, 207, 194, 0.40), transparent 55%),
-    radial-gradient(120% 120% at 85% 100%, rgba(199, 248, 244, 0.55), transparent 60%),
-    var(--bg-color);
+  background: var(--bg-color);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: 0 18px 40px var(--shadow-color);
   overflow: hidden;
 }

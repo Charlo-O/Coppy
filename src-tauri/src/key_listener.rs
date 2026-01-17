@@ -81,7 +81,8 @@ unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPA
                                  LAST_FOREGROUND_HWND.store(fg.0 as usize, Ordering::SeqCst);
                                  let mut point = POINT::default();
                                  let _ = GetCursorPos(&mut point);
-                                 let _ = window.set_position(PhysicalPosition::new(point.x, point.y));
+                                 // Position window above cursor (window height is 320)
+                                 let _ = window.set_position(PhysicalPosition::new(point.x, point.y - 320));
                                  let _ = window.show();
                                  let _ = window.set_focus();
                              }
