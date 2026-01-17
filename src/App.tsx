@@ -222,7 +222,7 @@ function App() {
       if (item.type === 'text') {
         await invoke('paste_text', { text: item.content });
       } else {
-        await invoke('paste_image', { data_url: item.content });
+        await invoke('paste_image', { dataUrl: item.content });
       }
     } catch (err) {
       console.error('Failed to copy', err);
