@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
+
+interface ToastState {
+  message: string;
+  kind: 'error' | 'info';
+}
 import './App.css';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
@@ -50,13 +55,86 @@ function App() {
   const [folders, setFolders] = useState<FavoriteFolder[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [favoritesLoaded, setFavoritesLoaded] = useState(false);
-  const [modal, setModal] = useState<null | { type: 'create-folder' | 'pin-folder' | 'settings'; itemId?: string }>(null);
+  type ModalState =
+    | null
+    | { type: 'create-folder' }
+    | { type: 'pin-folder'; itemId: string }
+    | { type: 'settings' }
+    | { type: 'edit-text'; itemId: string };
+
+  const [modal, setModal] = useState<ModalState>(null);
   const [modalFolderName, setModalFolderName] = useState('');
   const [modalSelectedFolderId, setModalSelectedFolderId] = useState<string>('none');
   const [pendingPinItemId, setPendingPinItemId] = useState<string | null>(null);
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [autostartLoading, setAutostartLoading] = useState(true);
+  const [editText, setEditText] = useState('');
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const pendingClipboardSetRef = useRef<null | { itemId: string; text: string; expiresAt: number }>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const showToast = (message: string, kind: ToastState['kind'] = 'info') => {
+    setToast({ message, kind });
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2600);
+  };
+
+  const hideCurrentWindow = async () => {
+    try {
+      await getCurrentWebviewWindow().hide();
+    } catch (err) {
+      console.error('Failed to hide window', err);
+      showToast('关闭失败', 'error');
+    }
+  };
+
+  const openEditTextForItem = (item: ClipboardItem) => {
+    if (item.type !== 'text') return;
+    setEditText(item.content);
+    setModal({ type: 'edit-text', itemId: item.id });
+  };
+
+  const confirmEditText = async () => {
+    if (!modal || modal.type !== 'edit-text') return;
+
+    const itemId = modal.itemId;
+    const newText = editText;
+
+    if (newText.trim().length === 0) {
+      showToast('内容不能为空', 'error');
+      return;
+    }
+
+    setItems(prev => prev.map(it => {
+      if (it.id !== itemId) return it;
+      return { ...it, type: 'text', content: newText, timestamp: Date.now() };
+    }));
+
+    const expiresAt = Date.now() + 1500;
+    pendingClipboardSetRef.current = { itemId, text: newText, expiresAt };
+    window.setTimeout(() => {
+      const pending = pendingClipboardSetRef.current;
+      if (pending && pending.itemId === itemId && pending.text === newText && Date.now() >= pending.expiresAt) {
+        pendingClipboardSetRef.current = null;
+      }
+    }, 1600);
+
+    closeModal();
+
+    try {
+      await invoke('set_clipboard_text', { text: newText });
+    } catch (e) {
+      console.error('Failed to set clipboard text', e);
+      showToast('写入系统剪贴板失败（列表已更新）', 'error');
+    }
+  };
+
 
   // Filter items
   const filteredItems = items.filter(item => {
@@ -72,6 +150,18 @@ function App() {
   });
 
   const handleKeyDown = async (e: KeyboardEvent) => {
+    if (modal) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+      }
+      return;
+    }
+
+    const active = document.activeElement;
+    const activeTag = (active && active instanceof HTMLElement) ? active.tagName.toLowerCase() : '';
+    const isTyping = activeTag === 'input' || activeTag === 'textarea';
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setSelectedIndex(prev => Math.min(prev + 1, filteredItems.length - 1));
@@ -83,13 +173,21 @@ function App() {
       selectItem(filteredItems[selectedIndex]);
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      await getCurrentWebviewWindow().hide();
+      await hideCurrentWindow();
     } else if (e.key >= '1' && e.key <= '9') {
       e.preventDefault();
       const index = parseInt(e.key) - 1;
       if (index < filteredItems.length) {
         selectItem(filteredItems[index]);
       }
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      const it = filteredItems[selectedIndex];
+      if (it && it.type === 'text') openEditTextForItem(it);
+    } else if (!isTyping && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      const it = filteredItems[selectedIndex];
+      if (it && it.type === 'text') openEditTextForItem(it);
     }
   };
 
@@ -192,21 +290,40 @@ function App() {
     const unlistenPromise = listen<ClipboardUpdate>('clipboard-update', (event) => {
       const payload = event.payload;
       setItems(prev => {
-        // Avoid duplicates if recent? Or just move to top?
-        // If generic "Copy" manager, usually moves to top.
+        const now = Date.now();
+
+        const pending = pendingClipboardSetRef.current;
+        const shouldUsePending =
+          pending &&
+          pending.expiresAt >= now &&
+          payload.type === 'text' &&
+          payload.content === pending.text;
+
+        if (shouldUsePending) {
+          const pendingItemId = pending.itemId;
+          pendingClipboardSetRef.current = null;
+
+          const existingById = prev.find(i => i.id === pendingItemId);
+          if (existingById) {
+            return [
+              { ...existingById, timestamp: now },
+              ...prev.filter(i => i.id !== pendingItemId)
+            ];
+          }
+        }
+
         const existing = prev.find(i => i.content === payload.content);
         if (existing) {
-          // Move to top (update timestamp)
           return [
-            { ...existing, timestamp: Date.now() },
+            { ...existing, timestamp: now },
             ...prev.filter(i => i.id !== existing.id)
           ];
         }
         return [{
-          id: Date.now().toString(),
+          id: now.toString(),
           type: payload.type,
           content: payload.content,
-          timestamp: Date.now(),
+          timestamp: now,
           pinned: false
         }, ...prev];
       });
@@ -252,10 +369,29 @@ function App() {
     setModal({ type: 'settings' });
   };
 
+  const onEditTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      void confirmEditText();
+    }
+  };
+
   const closeModal = () => {
     setModal(null);
     setPendingPinItemId(null);
+    setEditText('');
     searchInputRef.current?.focus();
+  };
+
+  const onTitleBarMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('.title-bar-actions')) return;
+    void getCurrentWebviewWindow().startDragging();
+  };
+
+  const hideWindow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await hideCurrentWindow();
   };
 
   const toggleAutostart = async () => {
@@ -263,13 +399,23 @@ function App() {
       setAutostartLoading(true);
       if (autostartEnabled) {
         await invoke('autostart_disable');
-        setAutostartEnabled(false);
       } else {
         await invoke('autostart_enable');
-        setAutostartEnabled(true);
       }
+
+      const enabled = await invoke<boolean>('autostart_is_enabled');
+      setAutostartEnabled(enabled);
+      showToast(enabled ? '已开启开机自启' : '已关闭开机自启');
     } catch (e) {
       console.error('Failed to toggle autostart', e);
+      const message = typeof e === 'string' ? e : '设置开机自启失败';
+      showToast(message, 'error');
+      try {
+        const enabled = await invoke<boolean>('autostart_is_enabled');
+        setAutostartEnabled(enabled);
+      } catch {
+        // ignore
+      }
     } finally {
       setAutostartLoading(false);
     }
@@ -291,9 +437,11 @@ function App() {
   };
 
   const confirmPinFolder = () => {
-    if (!modal?.itemId) return;
+    if (!modal || modal.type !== 'pin-folder') return;
+    const itemId = modal.itemId;
+
     setItems(prev => prev.map(it => {
-      if (it.id !== modal.itemId) return it;
+      if (it.id !== itemId) return it;
       return {
         ...it,
         pinned: true,
@@ -303,20 +451,19 @@ function App() {
     closeModal();
   };
 
-
-
   return (
     <div className="container">
       <div
         className="title-bar"
-        onMouseDown={() => getCurrentWebviewWindow().startDragging()}
+        onMouseDown={onTitleBarMouseDown}
       >
         <span className="title-bar-text">Coppy</span>
         <div className="title-bar-actions">
-          <button className="title-bar-action" onClick={openSettingsModal}>⚙</button>
+          <button className="title-bar-action" onMouseDown={(e) => e.stopPropagation()} onClick={openSettingsModal}>⚙</button>
           <button
             className="title-bar-close"
-            onClick={() => getCurrentWebviewWindow().hide()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={hideWindow}
           >×</button>
         </div>
       </div>
@@ -367,8 +514,23 @@ function App() {
                 <img className="item-image" src={item.content} />
               </div>
             )}
-            <div className="item-pin" onClick={(e) => openPinFolderModal(e, item)}>
-              {item.pinned ? '★' : '☆'}
+            <div className="item-actions">
+              {item.type === 'text' && (
+                <button
+                  className="item-action"
+                  onClick={(e) => { e.stopPropagation(); openEditTextForItem(item); }}
+                  title="Edit (E)"
+                >
+                  ✎
+                </button>
+              )}
+              <button
+                className="item-action item-pin"
+                onClick={(e) => openPinFolderModal(e, item)}
+                title={item.pinned ? 'Unpin' : 'Pin'}
+              >
+                {item.pinned ? '★' : '☆'}
+              </button>
             </div>
           </div>
         ))}
@@ -420,7 +582,28 @@ function App() {
                 <div className="modal-actions">
                   <button className="modal-btn" onClick={confirmPinFolder}>OK</button>
                   <button className="modal-btn secondary" onClick={closeModal}>Cancel</button>
-                  <button className="modal-btn secondary" onClick={() => openCreateFolderModal({ pinItemId: modal.itemId })}>New folder</button>
+                  <button
+                    className="modal-btn secondary"
+                    onClick={() => openCreateFolderModal({ pinItemId: modal.itemId })}
+                  >New folder</button>
+                </div>
+              </>
+            )}
+
+            {modal.type === 'edit-text' && (
+              <>
+                <div className="modal-title">Edit text</div>
+                <textarea
+                  className="modal-textarea"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  onKeyDown={onEditTextareaKeyDown}
+                  placeholder="Enter text"
+                  autoFocus
+                />
+                <div className="modal-actions">
+                  <button className="modal-btn" onClick={() => void confirmEditText()}>Save</button>
+                  <button className="modal-btn secondary" onClick={closeModal}>Cancel</button>
                 </div>
               </>
             )}
@@ -444,6 +627,12 @@ function App() {
               </>
             )}
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={`toast ${toast.kind === 'error' ? 'error' : ''}`}>
+          {toast.message}
         </div>
       )}
     </div>

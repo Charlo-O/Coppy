@@ -120,19 +120,12 @@ fn simulate_paste() {
     let _ = enigo.key(Key::Control, enigo::Direction::Release);
 }
 
-#[tauri::command]
-fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    eprintln!("paste_text: start");
-
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-
+fn try_set_clipboard_text(text: &str) -> Result<(), String> {
     let mut clipboard = Clipboard::new().map_err(|e| format!("Failed to init clipboard: {e:?}"))?;
 
     let mut last_err: Option<String> = None;
     for _ in 0..8 {
-        match clipboard.set_text(text.clone()) {
+        match clipboard.set_text(text.to_string()) {
             Ok(_) => {
                 last_err = None;
                 break;
@@ -143,7 +136,28 @@ fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
             }
         }
     }
+
     if let Some(err) = last_err {
+        Err(err)
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn set_clipboard_text(text: String) -> Result<(), String> {
+    try_set_clipboard_text(&text)
+}
+
+#[tauri::command]
+fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    eprintln!("paste_text: start");
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
+    if let Err(err) = try_set_clipboard_text(&text) {
         eprintln!("paste_text: {err}");
         return Err(err);
     }
@@ -171,6 +185,7 @@ fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
     eprintln!("paste_text: done");
     Ok(())
 }
+
 
  #[tauri::command]
  fn paste_image(app: tauri::AppHandle, data_url: String) -> Result<(), String> {
@@ -304,11 +319,7 @@ pub fn run() {
 
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     let builder = {
-        use tauri_plugin_autostart::MacosLauncher;
-        builder.plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            None,
-        ))
+        builder.plugin(tauri_plugin_autostart::Builder::new().build())
     };
 
     builder
@@ -323,6 +334,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             simulate_paste,
+            set_clipboard_text,
             paste_text,
             paste_image,
             load_favorites,
