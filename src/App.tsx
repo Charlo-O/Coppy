@@ -180,6 +180,20 @@ function App() {
       if (index < filteredItems.length) {
         selectItem(filteredItems[index]);
       }
+    } else if (!isTyping && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+      const it = filteredItems[selectedIndex];
+      if (!it) return;
+
+      if (it.type === 'image') {
+        e.preventDefault();
+        try {
+          const savedPath = await invoke<string>('save_image_data_url', { dataUrl: it.content });
+          showToast(`已保存到 ${savedPath}`);
+        } catch (err) {
+          console.error('Failed to save image', err);
+          showToast('保存图片失败', 'error');
+        }
+      }
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
       e.preventDefault();
       const it = filteredItems[selectedIndex];
@@ -339,10 +353,15 @@ function App() {
       if (item.type === 'text') {
         await invoke('paste_text', { text: item.content });
       } else {
-        await invoke('paste_image', { dataUrl: item.content });
+        // For images, just copy to clipboard (don't auto-paste)
+        // This allows the user to right-click paste wherever they want
+        await invoke('set_clipboard_image', { dataUrl: item.content });
+        showToast('已复制到剪贴板');
+        await hideCurrentWindow();
       }
     } catch (err) {
       console.error('Failed to copy', err);
+      showToast('复制失败', 'error');
     }
   };
 

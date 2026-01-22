@@ -29,12 +29,19 @@ base64 = "0.22"
 image = "0.25"
 winapi = "0.3"
 arboard = { version = "3", features = ["image-data"] }
+clipboard-win = "5"
 enigo = "0.2"
 windows = { version = "0.58", features = [
-
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_Graphics_Gdi",
 ] }
 
